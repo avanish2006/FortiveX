@@ -63,17 +63,10 @@ def qualify_lead_bant(
     return json.dumps(result)
 
 
-# ── Sentiment Analysis ────────────────────────────────────
-@tool
-def analyze_sentiment(text: str) -> str:
-    """
-    Analyze the emotional sentiment of the customer's latest message.
-    Returns a sentiment score from -1.0 (very negative) to 1.0 (very positive).
-    Call this after every customer message to track emotional tone.
-    """
-    # Lightweight keyword-based fallback; in production use a dedicated model
+def compute_sentiment(text: str) -> dict:
+    """Analyze customer message sentiment (-1.0 to 1.0)."""
     positive_words = {"great", "excellent", "love", "perfect", "interested", "yes", "definitely",
-                      "good", "awesome", "fantastic", "happy", "excited", "sure", "absolutely"}
+                      "good", "awesome", "fantastic", "happy", "excited", "sure", "absolutely", "helpful"}
     negative_words = {"no", "not", "bad", "hate", "terrible", "awful", "expensive", "difficult",
                       "problem", "issue", "frustrated", "disappointed", "wrong", "never", "refuse"}
 
@@ -87,7 +80,17 @@ def analyze_sentiment(text: str) -> str:
         score = round((pos - neg) / total, 2)
 
     label = "positive" if score > 0.2 else ("negative" if score < -0.2 else "neutral")
-    return json.dumps({"sentiment_score": score, "sentiment_label": label})
+    return {"sentiment_score": score, "sentiment_label": label}
+
+
+# ── Sentiment Analysis ────────────────────────────────────
+@tool
+def analyze_sentiment(text: str) -> str:
+    """
+    Analyze the emotional sentiment of the customer's latest message.
+    Returns a sentiment score from -1.0 (very negative) to 1.0 (very positive).
+    """
+    return json.dumps(compute_sentiment(text))
 
 
 # ── Appointment Booking ───────────────────────────────────
@@ -255,7 +258,6 @@ def _get_next_steps(bant_score: int, sentiment: float) -> list[str]:
 ALL_TOOLS = [
     retrieve_product_info,
     qualify_lead_bant,
-    analyze_sentiment,
     book_appointment,
     update_crm_contact,
     escalate_to_human,

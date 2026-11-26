@@ -129,7 +129,11 @@ async def voice_ws(websocket: WebSocket, session_id: str, language: str = "en"):
                 })
 
             elif "text" in data and data["text"]:
-                payload = json.loads(data["text"])
+                try:
+                    payload = json.loads(data["text"])
+                except json.JSONDecodeError:
+                    await websocket.send_json({"type": "error", "detail": "Invalid JSON payload"})
+                    continue
                 if payload.get("type") == "end_call":
                     state["status"] = "ended"
                     await _save_state(session_id, state)

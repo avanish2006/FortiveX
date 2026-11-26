@@ -50,7 +50,7 @@ async def _transcribe_gemini(audio_bytes: bytes, language: str) -> str:
     import google.generativeai as genai
 
     genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel(settings.llm_model or "gemini-2.0-flash")
+    model = genai.GenerativeModel(settings.llm_model or "gemini-3.1-flash-lite")
 
     prompt = (
         f"Transcribe the following speech audio accurately in language '{language}'. "

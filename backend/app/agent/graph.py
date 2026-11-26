@@ -18,57 +18,178 @@ from langgraph.prebuilt import ToolNode
 
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.state import AgentState
-from app.agent.tools import ALL_TOOLS
+from app.agent.tools import ALL_TOOLS, compute_sentiment
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def _build_llm():
-    """Instantiate the LLM with tool binding."""
+def _patch_gemini_multiple_tools():
+    """Patch langchain_google_genai to seamlessly support multiple function calls in a single turn."""
+    try:
+        import uuid
+        from typing import Any, Dict, List, Union, cast
+        import proto
+        from langchain_core.messages import AIMessage, AIMessageChunk, ToolCall, InvalidToolCall, ToolCallChunk
+        from langchain_core.output_parsers.openai_tools import parse_tool_calls
+        import langchain_google_genai.chat_models as gm
+
+        def _custom_parse_candidate(response_candidate, streaming: bool = False):
+            content: Union[None, str, List[Union[str, Dict[Any, Any]]]] = None
+            additional_kwargs: Dict[str, Any] = {}
+            tool_calls: List[ToolCall] = []
+            invalid_tool_calls: List[InvalidToolCall] = []
+            tool_call_chunks: List[ToolCallChunk] = []
+
+            for part in response_candidate.content.parts:
+                text = part.text
+                if text is not None:
+                    if not content:
+                        content = text
+                    elif isinstance(content, str) and text:
+                        content = [content, text]
+                    elif isinstance(content, list) and text:
+                        content.append(text)
+
+                if part.function_call:
+                    raw_args = proto.Message.to_dict(part.function_call).get("args", {})
+                    fn_dict = {
+                        "name": part.function_call.name,
+                        "arguments": json.dumps(raw_args),
+                    }
+                    if "function_call" not in additional_kwargs:
+                        additional_kwargs["function_call"] = fn_dict
+
+                    if streaming:
+                        tool_call_chunks.append(
+                            ToolCallChunk(
+                                name=fn_dict["name"],
+                                args=fn_dict["arguments"],
+                                id=str(uuid.uuid4()),
+                                index=len(tool_call_chunks),
+                            )
+                        )
+                    else:
+                        try:
+                            parsed = parse_tool_calls([{"function": fn_dict}], return_id=False)
+                            for tc in parsed:
+                                tool_calls.append(
+                                    ToolCall(
+                                        name=tc["name"],
+                                        args=tc["args"],
+                                        id=tc.get("id", str(uuid.uuid4())),
+                                    )
+                                )
+                        except Exception as e:
+                            invalid_tool_calls.append(
+                                InvalidToolCall(
+                                    name=fn_dict["name"],
+                                    args=fn_dict["arguments"],
+                                    id=str(uuid.uuid4()),
+                                    error=str(e),
+                                )
+                            )
+
+            if content is None:
+                content = ""
+
+            if streaming:
+                return AIMessageChunk(
+                    content=cast(Union[str, List[Union[str, Dict[Any, Any]]]], content),
+                    additional_kwargs=additional_kwargs,
+                    tool_call_chunks=tool_call_chunks,
+                )
+
+            return AIMessage(
+                content=cast(Union[str, List[Union[str, Dict[Any, Any]]]], content),
+                additional_kwargs=additional_kwargs,
+                tool_calls=tool_calls,
+                invalid_tool_calls=invalid_tool_calls,
+            )
+
+        gm._parse_response_candidate = _custom_parse_candidate
+        logger.info("Successfully patched langchain_google_genai to support multiple tool calls")
+    except Exception as e:
+        logger.warning("Could not patch langchain_google_genai: %s", e)
+
+
+_patch_gemini_multiple_tools()
+
+
+def _build_raw_llm():
+    """Instantiate the raw LLM without tools."""
     if settings.llm_provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model or "gemini-1.5-pro",
+        return ChatGoogleGenerativeAI(
+            model=settings.llm_model or "gemini-3.1-flash-lite",
             google_api_key=settings.gemini_api_key,
             temperature=0.7,
         )
     else:
-        llm = ChatOpenAI(
+        return ChatOpenAI(
             model=settings.llm_model or "gpt-4o-mini",
             openai_api_key=settings.openai_api_key,
             temperature=0.7,
             streaming=True,
         )
-    return llm.bind_tools(ALL_TOOLS)
+
+
+def _build_llm():
+    """Instantiate the LLM with tool binding."""
+    return _build_raw_llm().bind_tools(ALL_TOOLS)
 
 
 # ── Agent Node ────────────────────────────────────────────
 def agent_node(state: AgentState) -> dict:
-    """Main reasoning node — calls LLM with tools."""
-    llm = _build_llm()
+    """Main reasoning node — calls LLM with tools or synthesizes tool output."""
+    # Automatically compute sentiment on customer's latest input
+    sentiment_data = {"sentiment_score": state.get("sentiment_score", 0.0), "sentiment_label": state.get("sentiment_label", "neutral")}
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, HumanMessage):
+            sentiment_data = compute_sentiment(str(msg.content))
+            break
 
     system_msg = SystemMessage(
         content=SYSTEM_PROMPT.format(
             session_id=state["session_id"],
             language=state.get("language", "en"),
             bant_score=state.get("bant_score", 0),
-            sentiment=state.get("sentiment_label", "neutral"),
+            sentiment=sentiment_data["sentiment_label"],
         )
     )
 
-    # Prepend system message to messages for this call
-    messages_with_system = [system_msg] + list(state["messages"])
-    response: AIMessage = llm.invoke(messages_with_system)
+    # If the previous turn was tool execution, synthesize final response with tool knowledge
+    if state["messages"] and isinstance(state["messages"][-1], ToolMessage):
+        tool_results_text = "\n".join(
+            f"[{getattr(m, 'name', 'Tool')}] {m.content}"
+            for m in state["messages"]
+            if isinstance(m, ToolMessage)
+        )
+        human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+        last_human_text = human_msgs[-1].content if human_msgs else ""
+        synthesis_prompt = HumanMessage(
+            content=(
+                f"{last_human_text}\n\n"
+                f"[Grounded Knowledge & Tool Output]:\n{tool_results_text}\n\n"
+                "Please provide a direct, concise, natural voice response (1-2 sentences) to the customer using the facts above."
+            )
+        )
+        synthesis_msgs = [system_msg] + human_msgs[:-1] + [synthesis_prompt]
+        response = _build_raw_llm().invoke(synthesis_msgs)
+    else:
+        llm = _build_llm()
+        messages_with_system = [system_msg] + list(state["messages"])
+        response = llm.invoke(messages_with_system)
 
-    # Update intent heuristic
     content = response.content if isinstance(response.content, str) else ""
     intent = _detect_intent(content, state)
 
     return {
         "messages": [response],
         "intent": intent,
+        "sentiment_score": sentiment_data["sentiment_score"],
+        "sentiment_label": sentiment_data["sentiment_label"],
         "suggested_action": _suggest_action(state),
     }
 
@@ -83,18 +204,22 @@ def state_updater_node(state: AgentState) -> dict:
     After tools run, parse their JSON outputs and update state fields
     (BANT, sentiment, appointment, CRM flag etc.).
     """
-    updates: dict = {}
+    updates: dict = {"last_tool_output": "updated"}
 
     # Find the most recent ToolMessages
     for msg in reversed(state["messages"]):
         if not isinstance(msg, ToolMessage):
             break
+
+        updates["last_tool_output"] = str(msg.content)[:200]
+        tool_name = getattr(msg, "name", "") or ""
+        if tool_name == "retrieve_product_info":
+            updates["rag_context"] = str(msg.content)
+
         try:
             data = json.loads(msg.content)
         except (json.JSONDecodeError, TypeError):
             continue
-
-        tool_name = getattr(msg, "name", "") or ""
 
         if "bant_score" in data and isinstance(data["bant_score"], int):
             budget = data.get("bant_budget") or state.get("bant_budget")

@@ -48,10 +48,12 @@ services:
       DATABASE_URL: postgresql+asyncpg://salespilot:salespilot_secret@postgres:5432/salespilot
       REDIS_URL: redis://redis:6379/0
       FAISS_INDEX_PATH: /app/data/faiss_index
+      LLM_MODEL: ${LLM_MODEL:-gemini-3.1-flash-lite}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
     volumes:
       - ./backend:/app
       - faiss_data:/app/data
-      - ./docs:/app/docs_upload
+      - uploads_data:/app/docs_upload
     ports:
       - "8000:8000"
     depends_on:
@@ -85,3 +87,4 @@ volumes:
   postgres_data:
   redis_data:
   faiss_data:
+  uploads_data:
