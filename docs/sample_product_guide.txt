@@ -1,0 +1,21 @@
+# SalesPilot Cloud Platform — Product & Pricing Guide
+
+## Product Overview
+SalesPilot Cloud is an enterprise AI-driven customer operations and revenue intelligence platform designed for B2B SaaS, FinTech, and E-Commerce teams.
+
+## Key Features
+1. Autonomous Voice & Chat AI Agents: 24/7 inbound and outbound qualification in 30+ languages.
+2. Real-time CRM Sync: Native bi-directional integration with HubSpot, Salesforce, and Pipedrive.
+3. Smart Calendar Routing: Instant Google Calendar and Microsoft 365 meeting booking with round-robin rep assignment.
+4. Knowledge Grounding (RAG): Upload PDFs, product manuals, and playbooks for zero-hallucination answers.
+5. Compliance & Security: SOC 2 Type II certified, GDPR compliant, AES-256 encryption at rest, TLS 1.3 in transit.
+
+## Pricing Plans
+- Starter Plan: $299/month — Up to 500 voice minutes, 1 CRM integration, 50 knowledge base documents.
+- Growth Plan: $899/month — Up to 3,000 voice minutes, unlimited CRM & Calendar integrations, custom voice cloning, analytics dashboard.
+- Enterprise Plan: Custom pricing (starting at $2,500/month) — Unlimited voice minutes, dedicated VPC deployment, pgvector/Qdrant cluster, 99.99% SLA, SSO/SAML.
+
+## Onboarding & Support
+- Free 14-day pilot with full sandbox access.
+- Implementation takes under 48 hours for Starter and Growth plans.
+- 24/7 priority engineering support for Enterprise customers.
